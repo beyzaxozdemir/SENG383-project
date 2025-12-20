@@ -1,53 +1,110 @@
-from typing import List, Dict
-from models import Course, Classroom, Schedule
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+
+DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+TIMES = ["09:20", "10:20", "11:20", "12:20", "13:20", "14:20", "15:20", "16:20"]
+
+# Friday exam block 13:20–15:10 -> block 13:20 and 14:20 slots
+BLOCKED = {(4, 4), (4, 5)}  # (day_idx, time_idx)
 
 
-class BeePlanScheduler:
+@dataclass(frozen=True)
+class Course:
+    code: str
+    instructor_id: str
+    students: int
+    is_lab: bool = False
+
+
+@dataclass(frozen=True)
+class Classroom:
+    id: str
+    name: str
+    capacity: int
+
+
+@dataclass(frozen=True)
+class Instructor:
+    id: str
+    name: str
+
+
+@dataclass(frozen=True)
+class Placement:
+    course_code: str
+    instructor_id: str
+    room_id: str
+
+
+def pick_room(course: Course, rooms: List[Classroom]) -> Optional[Classroom]:
+    """Pick the smallest room that fits (simple heuristic)."""
+    candidates = [r for r in rooms if r.capacity >= course.students]
+    candidates.sort(key=lambda r: r.capacity)
+    return candidates[0] if candidates else None
+
+
+def generate_schedule(
+    courses: List[Course],
+    rooms: List[Classroom],
+) -> Tuple[Dict[Tuple[int, int], Placement], List[str], int, int]:
     """
-    Skeleton scheduler for BeePlan.
-
-    Week 9 scope:
-    - Provide a clean interface for generating and validating schedules.
-    - Real algorithm and rule checks will be implemented in later weeks.
+    Greedy deterministic scheduler.
+    Returns:
+      schedule: (day_idx, time_idx) -> Placement
+      report_lines: list of warnings/conflicts
+      conflicts_count
+      warnings_count
     """
+    schedule: Dict[Tuple[int, int], Placement] = {}
+    report: List[str] = []
+    conflicts = 0
+    warnings = 0
 
-    def __init__(self, courses: List[Course], classrooms: List[Classroom]) -> None:
-        self.courses = courses
-        self.classrooms = classrooms
+    courses_sorted = sorted(courses, key=lambda c: c.code)
 
-    def generate_schedule(self) -> List[Schedule]:
-        """
-        Generate schedules per year.
+    for course in courses_sorted:
+        room = pick_room(course, rooms)
+        if room is None:
+            warnings += 1
+            report.append(f"WARNING: Capacity - No room fits {course.code} ({course.students} students).")
+            continue
 
-        Week 9:
-        - Only groups courses by year and returns empty schedules.
-        - TODO: assign timeslots and classrooms respecting all constraints
-          (Friday exam block, lab after theory, capacity, instructor overlaps, etc.)
-        """
-        schedules_by_year: Dict[int, Schedule] = {}
+        placed = False
 
-        for course in self.courses:
-            if course.year not in schedules_by_year:
-                schedules_by_year[course.year] = Schedule(year=course.year)
+        for time_idx in range(len(TIMES)):
+            for day_idx in range(len(DAYS)):
+                if (day_idx, time_idx) in BLOCKED:
+                    continue
 
-            # TODO: create a ScheduledCourse with a proper timeslot and classroom
-            # and add it to schedules_by_year[course.year]
+                key = (day_idx, time_idx)
 
-        return list(schedules_by_year.values())
+                if key not in schedule:
+                    schedule[key] = Placement(course.code, course.instructor_id, room.id)
+                    placed = True
+                    break
+                else:
+                    existing = schedule[key]
+                    if existing.instructor_id == course.instructor_id:
+                        conflicts += 1
+                        report.append(
+                            f"CONFLICT: Instructor overlap at {DAYS[day_idx]} {TIMES[time_idx]} "
+                            f"({existing.course_code} vs {course.code}) instructor={course.instructor_id}"
+                        )
+                    if existing.room_id == room.id:
+                        conflicts += 1
+                        report.append(
+                            f"CONFLICT: Room overlap at {DAYS[day_idx]} {TIMES[time_idx]} "
+                            f"room={room.id} ({existing.course_code} vs {course.code})"
+                        )
 
-    def validate(self, schedules: List[Schedule]) -> List[str]:
-        """
-        Validate the generated schedules.
+            if placed:
+                break
 
-        Week 9:
-        - Only returns an empty list with TODO comments.
-        - TODO rules (for later):
-            * Friday exam block must be free.
-            * Instructors must not have overlapping courses.
-            * Daily theory hour limits for instructors.
-            * Classroom capacity and lab/theory room type.
-        """
-        violations: List[str] = []
+        if not placed:
+            warnings += 1
+            report.append(f"WARNING: Unscheduled - Could not place {course.code} (no available slot).")
 
-        # TODO: implement rule checks in V&V weeks
-        return violations
+    if not report:
+        report = ["No conflicts or warnings found."]
+
+    return schedule, report, conflicts, warnings
